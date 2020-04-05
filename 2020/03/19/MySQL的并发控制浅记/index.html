@@ -1,0 +1,81 @@
+<!DOCTYPE html><html lang="en"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description" content=""><title>MySQL的并发控制浅记 | Zhile Li</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//lib.baomitu.com/normalize/8.0.1/normalize.min.css"><link rel="stylesheet" type="text/css" href="//lib.baomitu.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//lib.baomitu.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//lib.baomitu.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//lib.baomitu.com/jquery/3.4.0/jquery.min.js"></script><link rel="icon" mask="" sizes="any" href="/favicon.ico"><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"><meta name="generator" content="Hexo 4.2.0"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">MySQL的并发控制浅记</h1><a id="logo" href="/.">Zhile Li</a><p class="description"></p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> Home</i></a><a href="/archives/"><i class="fa fa-archive"> Archive</i></a><a href="/about/"><i class="fa fa-user"> About</i></a><a href="/atom.xml"><i class="fa fa-rss"> RSS</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">MySQL的并发控制浅记</h1><div class="post-meta">Mar 19, 2020<span> | </span><span class="category"><a href="/categories/MySQL/">MySQL</a></span></div><div class="post-content"><p>如果数据库中的事务都是串行执行的，这种方式可以保障事务的执行不会出现异常和错误，但带来的问题是串行执行会带来性能瓶颈；而事务并发执行，如果不加以控制则会引发诸多问题，包括死锁、更新丢失等等。这就需要我们在性能和安全之间做出合理的权衡，使用适当的并发控制机制保障并发事务的执行。</p>
+<h2 id="并发事务带来的问题"><a href="#并发事务带来的问题" class="headerlink" title="并发事务带来的问题"></a>并发事务带来的问题</h2><p>并发事务访问相同记录大致可归纳为以下3种情况：</p>
+<ul>
+<li>读-读: 即并发事务相继读取同一记录；</li>
+<li>写-写: 即并发事务相继对同一记录做出修改；</li>
+<li>写-读 或者读-写: 即两个并发事务对同一记录分别进行读操作和写操作。</li>
+</ul>
+<h4 id="读-读"><a href="#读-读" class="headerlink" title="读-读"></a>读-读</h4><p>因为读取记录并不会对记录造成任何影响，所以同个事务并发读取同一记录也就不存在任何安全问题，所以允许这种操作。</p>
+<h4 id="写-写"><a href="#写-写" class="headerlink" title="写-写"></a>写-写</h4><p>如果允许并发事务都读取同一记录，并相继基于旧值对这一记录做出修改，那么就会出现前一个事务所做的修改被后面事务的修改覆盖，即出现<strong>提交覆盖</strong>的问题。</p>
+<p>另外一种情况，并发事务相继对同一记录做出修改，其中一个事务提交之后之后另一个事务发生回滚，这样就会出现已提交的修改因为回滚而丢失的问题，即<strong>回滚覆盖</strong>问题。</p>
+<p>这两种问题都造成丢失更新，其中回滚覆盖称为<strong>第一类丢失更新</strong>问题，提交覆盖称为<strong>第二类丢失更新</strong>问题。</p>
+<h4 id="读-写-或者-写-写"><a href="#读-写-或者-写-写" class="headerlink" title="读-写 或者 写-写"></a>读-写 或者 写-写</h4><p>这种情况较为复杂，也最容易出现问题。<br>如果一个事务读取了另一个事务尚未提交的修改记录，那么就出现了<strong>脏读</strong>的问题；</p>
+<p>如果我们加以控制使得一个事务只能读取其他已提交事务的修改的数据，那么这个事务在另一事物提交修改前后读取到的数据是不一样的，这就意味着发生了<strong>不可重复读</strong>；</p>
+<p>如果一个事务根据一些条件查询到一些记录，之后另一事物向表中插入了一些记录，原先的事务以相同条件再次查询时发现得到的结果跟第一次查询得到的结果不一致，这就意味着发生了<strong>幻读</strong>。</p>
+<h2 id="事务的隔离级别"><a href="#事务的隔离级别" class="headerlink" title="事务的隔离级别"></a>事务的隔离级别</h2><p>对于以上提到的并发事务执行过程中可能出现的问题，其严重性也是不一样的，我们可以按照问题的严重程度排个序</p>
+<pre><code>丢失更新 &gt; 脏读 &gt; 不可重复读 &gt; 幻读</code></pre><p>因此如果我们可以容忍一些严重程度较轻的问题，我们就能获取一些性能上的提升。于是便有了事务的四种隔离级别：</p>
+<ul>
+<li>读未提交（Read Uncommitted）：允许读取未提交的记录，会发生脏读、不可重复读、幻读；</li>
+<li>读已提交（Read Committed）：只允许读物已提交的记录，不会发生脏读，但会出现重复读、幻读；</li>
+<li>可重复读（Repeatable Read）：不会发生脏读和不可重复读的问题，但会发生幻读问题；但MySQL在此隔离级别下利用间隙锁可以禁止幻读问题的发生；</li>
+<li>可串行化（Serializable）：即事务串行执行，以上各种问题自然也就都不会发生。</li>
+</ul>
+<p>值得注意的是以上四种隔离级别都不会出现回滚覆盖的问题，但是提交覆盖的问题对于MySQL来说，在Read Uncommitted、Read Committed以及Repeatable Read这三种隔离级别下都会发生（标准的Repeatable Read隔离级别不允许出现提交覆盖的问题），需要额外加锁来避免此问题。</p>
+<h3 id="传统隔离级别的实现"><a href="#传统隔离级别的实现" class="headerlink" title="传统隔离级别的实现"></a>传统隔离级别的实现</h3><p>既然说到传统的隔离级别是基于锁实现的，我们先来了解一下锁。</p>
+<h4 id="锁"><a href="#锁" class="headerlink" title="锁"></a>锁</h4><p>传统的锁有两种：</p>
+<ul>
+<li>共享锁（Shared Locks）：简称S锁，事务对一条记录进行读操作时，需要先获取该记录的共享锁。</li>
+<li>排他锁（Exclusive Locks）：简称X锁，事务对一条记录进行写操作时，需要先获取该记录的排他锁。</li>
+</ul>
+<p>需要注意的是，加了共享锁的记录，其他事务也可以获得该记录的共享锁，但是无法获取该记录的排他锁，即S锁和S锁是兼容的，S锁和X锁是不兼容的；而加了排他锁的记录，其他事务既无法获取该记录的共享锁也无法获取排他锁，即X锁和X锁也是不兼容的。</p>
+<p>另外，刚刚说到事务对一条记录进行读操作时，需要先获取该记录的S锁，但有时事务在读取记录时需要阻止其他事务访问该记录，这时就需要获取该记录的X锁。以MySQL为例，有以下两种锁定读的方式：</p>
+<ul>
+<li>读取时对记录加S锁：</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">SELECT ... LOCK IN SHARE MODE;</span><br></pre></td></tr></table></figure>
+
+<p>如果事务执行了该语句，则会在读取的记录上加<code>S锁</code>，这样就允许其他事务也能获取到该记录的<code>S锁</code>；而如果其他事务需要获取该记录的<code>X锁</code>，那么就需要等待当前事务提交后释放掉<code>S锁</code>。</p>
+<ul>
+<li>读取时对记录加<code>X锁</code>：</li>
+</ul>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">SELECT ... FOR UPDATE;</span><br></pre></td></tr></table></figure>
+
+<p>如果事务执行了该语句，则会在读取的记录上加<code>X锁</code>，这样其他事务想要说去该记录的<code>S锁</code>或<code>X锁</code>，那么需要等待当前事务提交后释放掉<code>X锁</code>。</p>
+<p>对于锁的粒度而言，锁又可以分为两种：</p>
+<ul>
+<li>行锁：只锁住某一行记录，其他行的记录不受影响。</li>
+<li>表锁：锁住整个表，所有对于该表的操作都会受影响。</li>
+</ul>
+<h4 id="基于锁实现隔离级别"><a href="#基于锁实现隔离级别" class="headerlink" title="基于锁实现隔离级别"></a>基于锁实现隔离级别</h4><p>在基于锁的实现方式下，四种隔离级别的区别就在于加锁方式的区别：</p>
+<ul>
+<li><strong>读未提交</strong>：读操作不加锁，读读，读写，写读并行；写操作加<code>X锁</code>且直到事务提交后才释放。</li>
+<li><strong>读已提交</strong>：读操作加<code>S锁</code>，写操作加<code>X锁</code>且直到事务提交后才释放；读操作不会阻塞其他事务读或写，写操作会阻塞其他事务写和读，因此可以防止脏读问题。</li>
+<li><strong>可重复读</strong>：读操作加<code>S锁</code>且直到事务提交后才释放，写操作加<code>X锁</code>且直到事务提交后才释放；读操作不会阻塞其他事务读但会阻塞其他事务写，写操作会阻塞其他事务读和写，因此可以防止脏读、不可重复读。</li>
+<li><strong>串行化</strong>：读操作和写操作都加<code>X锁</code>且直到事务提交后才释放，粒度为表锁，也就是严格串行。</li>
+</ul>
+<p>这里面有一些细节值得注意：</p>
+<ul>
+<li>如果锁获取之后直到事务提交后才释放，这种锁称为<strong>长锁</strong>；如果锁在操作完成之后就被释放，这种锁称为<strong>短锁</strong>。例如，在读已提交隔离级别下，读操作所加<code>S锁</code>为短锁，写操作所加<code>X锁</code>为长锁。</li>
+<li>对于可重复读和串行化隔离级别，读操作所加<code>S锁</code>和写操作所加<code>X锁</code>均为长锁，即事务获取锁之后直到事务提交后才能释放，这种把获取锁和释放锁分为两个不同的阶段的协议称为<strong>两阶段锁</strong>协议（<code>2-phase locking</code>）。两阶段锁协议规定在加锁阶段，一个事务可以获得锁但是不能释放锁；而在解锁阶段事务只可以释放锁，并不能获得新的锁。两阶段锁协议能够保证事务串行化执行，解决事务并发问题，但也会导致死锁发生的概率大大提升。</li>
+</ul>
+<h3 id="MySQL隔离级别的实现"><a href="#MySQL隔离级别的实现" class="headerlink" title="MySQL隔离级别的实现"></a>MySQL隔离级别的实现</h3><p>不同数据库对于<code>SQL</code>标准中规定的隔离级别支持是不一样的，数据库引擎实现隔离级别的方式虽然都在尽可能地贴近标准的隔离级别规范，但和标准的预期还是有些不一样的地方。</p>
+<p><code>MySQL</code>（<code>InnoDB</code>）支持的4种隔离级别，与标准的各级隔离级别允许出现的问题有些出入，比如<code>MySQL</code>在可重复读隔离级别下可以防止幻读的问题出现，但也会出现提交覆盖的问题。</p>
+<p>相对于传统隔离级别基于锁的实现方式，<code>MySQL</code> 是通过<code>MVCC</code>（多版本并发控制）来实现读-写并发控制，又是通过两阶段锁来实现写-写并发控制的。<code>MVCC</code>是一种无锁方案，用以解决事务<strong>读-写</strong>并发的问题，能够极大提升<strong>读-写</strong>并发操作的性能。</p>
+<h4 id="MVCC的简单实现原理"><a href="#MVCC的简单实现原理" class="headerlink" title="MVCC的简单实现原理"></a>MVCC的简单实现原理</h4><p>MVCC是通过保存数据在某个时间点的快照实现的, 也就是说不管执行多长时间, 每个事务看到数据都是一致的. 根据事务开始时间的不同, 每个事务对同一张表, 同一时刻看到的数据可能是不一样的. 下面通过InnoDB的简化版行为来介绍一下MVCC是如何工作的. </p>
+<p>InnoDB的MVCC是通过在每行记录中添加两个隐藏列, 分别保存行的创建时间, 和行的过期时间(或者称为删除时间),  具体存储的值并不是具体的时间值而是系统版本号(System Version number) . 每开启一个新的事务的时候, 系统版本号就会自动递增. 事务开始时刻的版本号会作为当前事务的版本号, 用来和查询到的每行记录的版本号做比较. </p>
+<h5 id="REPEATABLE-READ下MVCC实现"><a href="#REPEATABLE-READ下MVCC实现" class="headerlink" title="REPEATABLE READ下MVCC实现"></a>REPEATABLE READ下MVCC实现</h5><ul>
+<li><p><strong>INSERT</strong>: InnoDB 为新插入的每一行保存当前系统版本号作为行版本号.</p>
+</li>
+<li><p><strong>DELETE</strong>: InnoDB为删除的每一行保存当前系统版本号作为行删除标识.</p>
+</li>
+<li><p><strong>UPDATE</strong>: InnoDB插入一行新纪录, 保存当前系统版本号作为行版本号, 同时保存当前系统版本号作为旧记录行的删除标识</p>
+</li>
+<li><p><strong>SELECT</strong>: InnoDB会根据一下两个条件检查每行记录:</p>
+<ol>
+<li>InnoDB 只查找版本早于当前事务的版本的数据行, 这样可以确保事务读取的行,要么在事务开始之前已经存在, 要么是事务自身插入或者修改的</li>
+<li>行的删除版本要么未定义, 要么大于当前事务版本. 这可以确保当前事务读到的行在事务开始之前未被修改或删除</li>
+</ol>
+</li>
+</ul>
+<p>MVCC只在REPEATABLE READ 和 READ COMMITED两个隔离级别下工作. 其他隔离级别都和MVCC不兼容, 因为READ UNCOMMITED总是读取最新的行, 而SERIALIZABLE则会对所有读取的行加写锁.  </p>
+</div><div><ul class="post-copyright"><li class="post-copyright-author"><strong>Author: </strong>Li Zhile</li><li class="post-copyright-link"><strong>Blog Link: </strong><a href="/2020/03/19/MySQL的并发控制浅记/">https://bransummer.github.io/2020/03/19/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91%E6%8E%A7%E5%88%B6%E6%B5%85%E8%AE%B0/</a></li><li class="post-copyright-license"><strong>Copyright Declaration: </strong>The author owns the copyright. Please indicate the source reproduced!</li></ul></div><br><div class="tags"><a href="/tags/MySQL/">MySQL</a></div><div class="post-nav"><a class="next" href="/2020/03/10/%E5%85%B3%E4%BA%8E%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">关于分布式锁</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.baidu.com/baidu" method="get" accept-charset="utf-8" target="_blank"><input type="search" name="word" maxlength="20" placeholder="Search"/><input type="hidden" name="si" value="https://bransummer.github.io"/><input name="tn" type="hidden" value="bds"/><input name="cl" type="hidden" value="3"/><input name="ct" type="hidden" value="2097152"/><input name="s" type="hidden" value="on"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> Categories</i></div><ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Java/">Java</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/MySQL/">MySQL</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/%E6%90%9C%E7%B4%A2%E5%BC%95%E6%93%8E/">搜索引擎</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> Tags</i></div><div class="tagcloud"><a href="/tags/Java/" style="font-size: 15px;">Java</a> <a href="/tags/%E5%B9%B6%E5%8F%91/" style="font-size: 15px;">并发</a> <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" style="font-size: 15px;">分布式</a> <a href="/tags/Redis/" style="font-size: 15px;">Redis</a> <a href="/tags/MySQL/" style="font-size: 15px;">MySQL</a> <a href="/tags/elasticsearch/" style="font-size: 15px;">elasticsearch</a> <a href="/tags/%E6%90%9C%E7%B4%A2%E5%BC%95%E6%93%8E/" style="font-size: 15px;">搜索引擎</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> Recent</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2020/03/19/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91%E6%8E%A7%E5%88%B6%E6%B5%85%E8%AE%B0/">MySQL的并发控制浅记</a></li><li class="post-list-item"><a class="post-list-link" href="/2020/03/10/%E5%85%B3%E4%BA%8E%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81/">关于分布式锁</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/08/09/Java%E7%9A%84%E6%BB%A1%E8%BD%BD%E7%BA%BF%E7%A8%8B/">Java的满载线程</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/02/09/Elasticsearch%E5%AE%9E%E8%B7%B5-1-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/">Elasticsearch实践(1)--基本概念</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> Links</i></div><ul></ul><a href="https://github.com/BranSummer" title="我的github" target="_blank">我的github</a><ul></ul><a href="https://www.aliyun.com/minisite/goods?userCode=qwh4ptrk" title="阿里云推广" target="_blank">阿里云推广</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2020 <a href="/." rel="nofollow">Zhile Li.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//lib.baomitu.com/fancybox/3.5.7/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//lib.baomitu.com/fancybox/3.5.7/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
